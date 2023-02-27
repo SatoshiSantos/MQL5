@@ -1,0 +1,757 @@
+//+------------------------------------------------------------------+
+//|                                                2023 RS EA v1.mq5 |
+//|                        Copyright 2023,Santos Family Holdings LLC |
+//|                          https://www.SantosFamilyHoldingsLLC.com |
+//+------------------------------------------------------------------+
+#property copyright "Copyright 2023,Santos Family Holdings LLC"
+#property link      "https://www.SantosFamilyHoldingsLLC.com"
+#property version   "1.00"
+
+//Include Files
+#include <Trade\Trade.mqh>
+#include <Trade\SymbolInfo.mqh>
+#include <Trade\PositionInfo.mqh>
+#include <Trade\AccountInfo.mqh>
+#include <Tools\DateTime.mqh>
+
+CTrade            ExtTrade;                      // trading object
+CPositionInfo     position;                   // trade position object
+
+// Definition of an hour. This is necessary for a drop down menu for hours input.
+enum ENUM_HOUR
+  {
+   h00 = 00, // 00:00
+   h01 = 01, // 01:00
+   h02 = 02, // 02:00
+   h03 = 03, // 03:00
+   h04 = 04, // 04:00
+   h05 = 05, // 05:00
+   h06 = 06, // 06:00
+   h07 = 07, // 07:00
+   h08 = 08, // 08:00
+   h09 = 09, // 09:00
+   h10 = 10, // 10:00
+   h11 = 11, // 11:00
+   h12 = 12, // 12:00
+   h13 = 13, // 13:00
+   h14 = 14, // 14:00
+   h15 = 15, // 15:00
+   h16 = 16, // 16:00
+   h17 = 17, // 17:00
+   h18 = 18, // 18:00
+   h19 = 19, // 19:00
+   h20 = 20, // 20:00
+   h21 = 21, // 21:00
+   h22 = 22, // 22:00
+   h23 = 23, // 23:00
+  };
+
+
+//--- Hour inputs
+ ENUM_HOUR StartHour            = h17; // First operation hour
+ ENUM_HOUR LastHour             = h23; // Last operation hour
+
+//Weekday inputs and array
+ bool Sunday   =false; // Sunday
+ bool Monday   =true; // Monday
+ bool Tuesday  =true; // Tuesday
+ bool Wednesday=true; // Wednesday
+ bool Thursday =true; // Thursday
+ bool Friday   =true; // Friday
+ bool Saturday =false; // Saturday
+ bool WeekDays[7];
+
+ input int MagicNumber =1129201622;//Magic Number
+ double Lots     =0.1; // Lots
+
+
+ bool LotOptimized = true;
+ input double MinLotSize          =0.5; // MinimumLots
+ double MaxLotSize          =5.0; // Maximum Lots
+ double MaximumRisk        = 0.90;    // Maximum Risk in percentage
+ double DecreaseFactor     = 1;       // Descrease factor
+
+//bools
+ bool Conditions_check       = false; // Conditions Check
+ bool traditionalTrailingStopLoss = true; // Traditional trailing stop loss Skip
+ bool CheckForClosingConditions      = false; // Check for closing conditions
+ bool EMATrailingSTop      = true; // EMA Trailing stop
+ bool ClosePartialPositions      = false; // Close partial position
+
+
+ double ClosePartialPercent     = 0.8; // Close partial position percent
+ double ClosePartialTarget     = 20000; // Close partial position target (3 & 5 Digit symbols Pips. 2 & 4 digit symbols Points)
+
+
+
+ int stopLossPoints = 7000; // Stop loss (3 & 5 Digit symbols Pips. 2 & 4 digit symbols Points)
+ int TakeProfitPoints = 30000; // Take Profit (3 & 5 Digit symbols Pips. 2 & 4 digit symbols Points)
+
+ int    MovingPeriod1       = 26;      // Moving Average period 1
+ int    MovingPeriod2       = 42;      // Moving Average period 2
+ int    MovingPeriod3       = 53;      // Moving Average period 3
+ int    MovingPeriod4       = 58;      // Moving Average period 4
+ int    MovingPeriod5       = 60;    // Moving Average period 5
+ int    MovingPeriodSL       = 6;    // Moving Average stop loss 
+ int    MovingPeriodShiftValue    = 8;     //Moving Average period shift value
+
+//Set Handles
+int          EMA1_Handle =0;
+int          EMA2_Handle =0;
+int          EMA3_Handle =0;
+int          EMA4_Handle =0;
+int          EMA5_Handle =0;
+int          EMA_TrailSL_Handle =0;
+int          EMA2Shift_Handle=0;
+double       PointValue =0;
+
+//Set Global Variables
+double current_bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+double current_ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+  {
+//---
+
+   ExtTrade.SetExpertMagicNumber(MagicNumber);
+   ExtTrade.SetMarginMode();
+   ExtTrade.SetTypeFillingBySymbol(Symbol());
+
+   double MyPoint=_Point;
+   if(_Digits==3 || _Digits==5)
+      MyPoint=_Point*10;
+   PointValue= MyPoint;
+
+   if(CheckActiveHours())
+
+      if(EMATrailingSTop && traditionalTrailingStopLoss)
+         Alert("Only one trailing stop method allowed. Review your inputs for accuracy");
+
+   WeekDays[0]=Sunday;
+   WeekDays[1]=Monday;
+   WeekDays[2]=Tuesday;
+   WeekDays[3]=Wednesday;
+   WeekDays[4]=Thursday;
+   WeekDays[5]=Friday;
+   WeekDays[6]=Saturday;
+
+
+
+//--- Moving Average indicator
+   EMA1_Handle=iMA(_Symbol,_Period,MovingPeriod1,0,MODE_SMA,PRICE_CLOSE);
+   if(EMA1_Handle==INVALID_HANDLE)
+     {
+      printf("Error creating MA indicator");
+      return(INIT_FAILED);
+     }
+
+   EMA2_Handle=iMA(_Symbol,_Period,MovingPeriod2,0,MODE_SMA,PRICE_CLOSE);
+   if(EMA2_Handle==INVALID_HANDLE)
+     {
+      printf("Error creating MA indicator");
+      return(INIT_FAILED);
+     }
+
+   EMA3_Handle=iMA(_Symbol,_Period,MovingPeriod3,0,MODE_SMA,PRICE_CLOSE);
+   if(EMA3_Handle==INVALID_HANDLE)
+     {
+      printf("Error creating MA indicator");
+      return(INIT_FAILED);
+     }
+
+   EMA4_Handle=iMA(_Symbol,_Period,MovingPeriod4,0,MODE_SMA,PRICE_CLOSE);
+   if(EMA4_Handle==INVALID_HANDLE)
+     {
+      printf("Error creating MA indicator");
+      return(INIT_FAILED);
+     }
+
+   EMA5_Handle=iMA(_Symbol,_Period,MovingPeriod5,0,MODE_SMA,PRICE_CLOSE);
+   if(EMA5_Handle==INVALID_HANDLE)
+     {
+      printf("Error creating MA indicator");
+      return(INIT_FAILED);
+     }
+
+   EMA2Shift_Handle=iMA(_Symbol,_Period,MovingPeriod2,MovingPeriodShiftValue,MODE_SMA,PRICE_CLOSE);
+   if(EMA2Shift_Handle==INVALID_HANDLE)
+     {
+      printf("Error creating MA indicator");
+      return(INIT_FAILED);
+     }
+
+   EMA_TrailSL_Handle=iMA(_Symbol,_Period,MovingPeriodSL,0,MODE_SMA,PRICE_CLOSE);
+   if(EMA_TrailSL_Handle==INVALID_HANDLE)
+     {
+      printf("Error creating MA indicator");
+      return(INIT_FAILED);
+     }
+
+//--- ok
+   return(INIT_SUCCEEDED);
+  }
+//+------------------------------------------------------------------+
+//| Adjust Trading Hours                                             |
+//+------------------------------------------------------------------+
+bool CheckActiveHours()
+  {
+   MqlDateTime mdt;
+   TimeToStruct(TimeCurrent(),mdt);
+// Set operations disabled by default.
+   bool OperationsAllowed = false;
+// Check if the current hour is between the allowed hours of operations. If so, return true.
+   if((StartHour == LastHour) && (mdt.hour == StartHour))
+      OperationsAllowed = true;
+   if((StartHour < LastHour) && (mdt.hour  >= StartHour) && (mdt.hour <= LastHour))
+      OperationsAllowed = true;
+   if((StartHour > LastHour) && (((mdt.hour >= LastHour) && (mdt.hour <= 23)) || ((mdt.hour <= StartHour) && (mdt.hour > 0))))
+      OperationsAllowed = true;
+   return OperationsAllowed;
+  }
+  //+------------------------------------------------------------------+
+//| Calculate optimal lot size                                       |
+//+------------------------------------------------------------------+
+double TradeSizeOptimized(void)
+  {
+   double lot =Lots;
+
+   if(LotOptimized == true)
+     {
+      double price=0.0;
+      double margin=0.0;
+      //--- select lot size
+      if(!SymbolInfoDouble(_Symbol,SYMBOL_ASK,price))
+         return(0.0);
+      if(!OrderCalcMargin(ORDER_TYPE_BUY,_Symbol,1.0,price,margin))
+         return(0.0);
+      if(margin<=0.0)
+         return(0.0);
+
+      lot=NormalizeDouble(AccountInfoDouble(ACCOUNT_MARGIN_FREE)*MaximumRisk/margin,2);
+
+      //--- calculate number of losses orders without a break
+      if(DecreaseFactor>0)
+        {
+         //--- select history for access
+         HistorySelect(0,TimeCurrent());
+         //---
+         int    orders=HistoryDealsTotal();  // total history deals
+         int    losses=0;                    // number of losses orders without a break
+
+         for(int i=orders-1; i>=0; i--)
+           {
+            ulong ticket=HistoryDealGetTicket(i);
+            if(ticket==0)
+              {
+               Print("HistoryDealGetTicket failed, no trade history");
+               break;
+              }
+            //--- check symbol
+            if(HistoryDealGetString(ticket,DEAL_SYMBOL)!=_Symbol)
+               continue;
+            //--- check Expert Magic number
+            if(HistoryDealGetInteger(ticket,DEAL_MAGIC)!=MagicNumber)
+               continue;
+            //--- check profit
+            double profit=HistoryDealGetDouble(ticket,DEAL_PROFIT);
+            if(profit>0.0)
+               break;
+            if(profit<0.0)
+               losses++;
+           }
+         //---
+         if(losses>1)
+            lot=NormalizeDouble(lot-lot*losses/DecreaseFactor,1);
+        }
+     }
+//--- normalize and check limits
+   double stepvol=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
+   lot=stepvol*NormalizeDouble(lot/stepvol,0);
+
+   double minvol=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
+   if(lot<minvol || lot<MinLotSize)
+      lot=MinLotSize;
+
+   double maxvol=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX);
+   if(lot>maxvol || lot>MaxLotSize)
+      lot=MaxLotSize;
+//--- return trading volume
+   return(lot);
+  }
+
+//+------------------------------------------------------------------+
+//| Check for open position conditions                               |
+//+------------------------------------------------------------------+
+void CheckForOpen(void)
+  {
+   if(WeekDays_Check() ==true)
+     {
+      if(CheckActiveHours()==true)
+        {
+         //--- get current Moving Average
+         double   EMA_1[1];
+         if(CopyBuffer(EMA1_Handle,0,0,1,EMA_1)!=1)
+           {
+            Print("CopyBuffer from iMA failed, no data");
+            return;
+           }
+
+         double   EMA_2[1];
+         if(CopyBuffer(EMA2_Handle,0,0,1,EMA_2)!=1)
+           {
+            Print("CopyBuffer from iMA failed, no data");
+            return;
+           }
+
+
+         double   EMA_3[1];
+         if(CopyBuffer(EMA3_Handle,0,0,1,EMA_3)!=1)
+           {
+            Print("CopyBuffer from iMA failed, no data");
+            return;
+           }
+
+
+         double   EMA_4[1];
+         if(CopyBuffer(EMA4_Handle,0,0,1,EMA_4)!=1)
+           {
+            Print("CopyBuffer from iMA failed, no data");
+            return;
+           }
+
+
+         double   EMA_5[1];
+         if(CopyBuffer(EMA5_Handle,0,0,1,EMA_5)!=1)
+           {
+            Print("CopyBuffer from iMA failed, no data");
+            return;
+           }
+
+         double   EMA_2Shift[1];
+         if(CopyBuffer(EMA2Shift_Handle,0,0,1,EMA_2Shift)!=1)
+           {
+            Print("CopyBuffer from iMA failed, no data");
+            return;
+           }
+
+
+
+         //---set stop loss variables
+         double Buy_sl =0;
+         double Sell_sl =0;
+         // double BuyTP = NormalizeDouble(position.PriceCurrent()+ (TakeProfitPoints * PointValue),_Digits);
+         //double SellTP =  NormalizeDouble(position.PriceOpen()-(TakeProfitPoints * PointValue),_Digits);
+         double BuyTP =0;
+         double SellTP=0;
+
+         //---set EMA initial stop loss
+         if(EMATrailingSTop)
+           {
+            double   EMA_TrailStop[1];
+            if(CopyBuffer(EMA_TrailSL_Handle,0,0,1,EMA_TrailStop)!=1)
+              {
+               Print("CopyBuffer from iMA failed, no data");
+               return;
+              }
+            else
+              {
+               Buy_sl = EMA_TrailStop[0];
+               Sell_sl = EMA_TrailStop[0];
+              }
+           }
+
+         //--- check signals
+         ENUM_ORDER_TYPE signal=WRONG_VALUE;
+
+         if(EMA_1[0] < EMA_2[0]
+            && EMA_2[0] < EMA_3[0]
+            && EMA_3[0] < EMA_4[0]
+            && EMA_4[0] < EMA_5[0]
+            && EMA_2[0] < EMA_2Shift[0]
+
+
+
+           )
+            signal=ORDER_TYPE_SELL;    // sell conditions
+         else
+           {
+            if(EMA_1[0] > EMA_2[0]
+               && EMA_2[0] > EMA_3[0]
+               && EMA_3[0] > EMA_4[0]
+               && EMA_4[0] > EMA_5[0]
+               && EMA_2[0] > EMA_2Shift[0]
+
+
+
+
+              )
+               signal=ORDER_TYPE_BUY;  // buy conditions
+           }
+         //--- additional checking
+
+         if(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && Bars(_Symbol,_Period)>100)
+           {
+            if(signal==ORDER_TYPE_SELL)
+              {
+               ExtTrade.PositionOpen(_Symbol,ORDER_TYPE_SELL,TradeSizeOptimized(),current_bid,Sell_sl,SellTP);
+              }
+            else
+              {
+               if(signal==ORDER_TYPE_BUY)
+                 {
+                  ExtTrade.PositionOpen(_Symbol,ORDER_TYPE_BUY,TradeSizeOptimized(),current_ask,Buy_sl,BuyTP);
+                 }
+              }
+           }
+         //---
+        }
+     }
+  }
+//+------------------------------------------------------------------+
+//| Traditional Trailing stop                                        |
+//+------------------------------------------------------------------+
+void TrailStop(void)
+  {
+
+// Move trailing stop towards profit.
+   double stopLoss = stopLossPoints ;
+   uint PositionsCount = PositionsTotal();
+
+   if(traditionalTrailingStopLoss && PositionsCount > 0)
+     {
+      for(int i = PositionsCount-1; i >= 0; i--)
+        {
+         if(position.SelectByIndex(i) && position.Symbol() == Symbol() && position.Magic() == MagicNumber)
+           {
+            ENUM_POSITION_TYPE type = position.PositionType();
+            double CurrentSL = position.StopLoss();
+            double CurrentPrice = position.PriceCurrent();
+            double BuyTP = position.PriceOpen()+ (TakeProfitPoints*PointValue);
+            double SellTP =  position.PriceOpen()-(TakeProfitPoints*PointValue);
+
+            if(type == POSITION_TYPE_BUY)
+              {
+               if(CurrentSL == 0.0)
+                 {
+                  ExtTrade.PositionModify(position.Ticket(), NormalizeDouble((CurrentPrice - (stopLoss* PointValue)), Digits()), BuyTP);
+                 }
+
+               if(CurrentPrice - CurrentSL >= (stopLoss* PointValue)*2 +MathAbs(current_ask-current_bid))
+                 {
+                  ExtTrade.PositionModify(position.Ticket(), NormalizeDouble((CurrentPrice - (stopLoss* PointValue)), Digits()), BuyTP);
+                 }
+              }
+            if(type == POSITION_TYPE_SELL)
+              {
+               if(CurrentSL == 0.0)
+                 {
+                  ExtTrade.PositionModify(position.Ticket(), NormalizeDouble((CurrentPrice + (stopLoss* PointValue)), Digits()), SellTP);
+                 }
+
+               if(MathAbs(CurrentPrice - CurrentSL) >= (stopLoss* PointValue)*2 +MathAbs(current_ask-current_bid))
+                 {
+                  ExtTrade.PositionModify(position.Ticket(), NormalizeDouble((CurrentPrice + (stopLoss* PointValue)), Digits()), SellTP);
+                 }
+              }
+           }
+        }
+     }
+  }
+//+------------------------------------------------------------------+
+//|EMA Trail SL                                                      |
+//+------------------------------------------------------------------+
+void EMATrailStop(void)
+  {
+   uint PositionsCount = PositionsTotal();
+
+   double   EMA_SL[1];
+   if(CopyBuffer(EMA_TrailSL_Handle,0,0,1,EMA_SL)!=1)
+     {
+      Print("CopyBuffer from iMA failed, no data");
+      return;
+     }
+
+   if(EMATrailingSTop && PositionsCount > 0)
+     {
+      for(int i = PositionsCount-1; i >= 0; i--)
+        {
+         if(position.SelectByIndex(i) && position.Symbol() == Symbol() && position.Magic() == MagicNumber)
+           {
+            ENUM_POSITION_TYPE type = position.PositionType();
+            double BuyTP = position.PriceOpen()+ (TakeProfitPoints*PointValue);
+            double SellTP =  position.PriceOpen()-(TakeProfitPoints*PointValue);
+            double CurrentTP = position.TakeProfit();
+            double CurrentSL = position.StopLoss();
+            double CurrentPrice = position.PriceCurrent();
+
+            if(type == POSITION_TYPE_BUY)
+              {
+
+               if(CurrentTP <=0 && TakeProfitPoints>0)
+                 {
+                  ExtTrade.PositionModify(position.Ticket(),CurrentSL, BuyTP);
+                 }
+
+               if(CurrentSL >= EMA_SL[0])
+                  return;
+               if(CurrentSL < EMA_SL[0])
+                 {
+                  ExtTrade.PositionModify(position.Ticket(),EMA_SL[0], CurrentTP);
+                 }
+              }
+
+
+            if(type == POSITION_TYPE_SELL)
+              {
+               if(CurrentTP <=0 && TakeProfitPoints>0)
+                 {
+                  ExtTrade.PositionModify(position.Ticket(),CurrentSL, SellTP);
+                 }
+
+               if(CurrentSL <= EMA_SL[0])
+                  return;
+               if(CurrentSL > EMA_SL[0])
+                 {
+                  ExtTrade.PositionModify(position.Ticket(),EMA_SL[0], CurrentTP);
+                 }
+              }
+
+           }
+        }
+
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Check for close position conditions                              |
+//+------------------------------------------------------------------+
+void CheckForClose(void)
+  {
+   double   EMA_2[1];
+   if(CopyBuffer(EMA2_Handle,0,0,1,EMA_2)!=1)
+     {
+      Print("CopyBuffer from iMA failed, no data");
+      return;
+     }
+
+   double   EMA_2Shift[1];
+   if(CopyBuffer(EMA2Shift_Handle,0,0,1,EMA_2Shift)!=1)
+     {
+      Print("CopyBuffer from iMA failed, no data");
+      return;
+     }
+//--- positions already selected before
+   bool signal=false;
+   long type=PositionGetInteger(POSITION_TYPE);
+
+   if(type==(long)POSITION_TYPE_BUY
+      && EMA_2Shift[0] > EMA_2[0]
+
+
+     )
+      signal=true;
+   if(type==(long)POSITION_TYPE_SELL
+      && EMA_2Shift[0] < EMA_2[0]
+
+
+     )
+      signal=true;
+//--- additional checking
+   if(signal)
+     {
+      if(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && Bars(_Symbol,_Period)>100)
+         ExtTrade.PositionClose(_Symbol,3);
+     }
+//---
+  }
+//+------------------------------------------------------------------+
+//| Close partial position                                           |
+//+------------------------------------------------------------------+
+void ClosePartial(void)
+  {
+
+   double CurrentPrice = position.PriceCurrent();
+   double OpenPrice = position.PriceOpen();
+
+
+//--- positions already selected before
+   bool signal=false;
+   long type=PositionGetInteger(POSITION_TYPE);
+
+   if(type==(long)POSITION_TYPE_BUY
+      && CurrentPrice -OpenPrice >= ClosePartialTarget*PointValue
+
+     )
+      signal=true;
+   if(type==(long)POSITION_TYPE_SELL
+      && OpenPrice - CurrentPrice >= ClosePartialTarget*PointValue
+
+
+     )
+      signal=true;
+//--- additional checking
+if (position.Volume() > NormalizeDouble(TradeSizeOptimized()*ClosePartialPercent,2))
+   if(signal)
+     {
+      if(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && Bars(_Symbol,_Period)>100)
+         ExtTrade.PositionClosePartial(position.Ticket(), NormalizeDouble(TradeSizeOptimized()*ClosePartialPercent,2),3);
+     }
+//---
+  }
+//+------------------------------------------------------------------+
+//|Total Orders count                                                |
+//+------------------------------------------------------------------+
+int TotalOrdersCount()
+  {
+   int result=0;
+   int posTotal=PositionsTotal();
+   for(int posIndex=posTotal-1; posIndex>=0; posIndex--)
+     {
+      ulong ticket=PositionGetTicket(posIndex);
+      if(PositionSelectByTicket(ticket) && PositionGetInteger(POSITION_MAGIC)==MagicNumber)
+         result++;
+     }
+   return (result);
+  }
+//+------------------------------------------------------------------+
+//| Conditions check                                                 |
+//+------------------------------------------------------------------+
+void ConditionsCheck(void)
+  {
+
+//--- get current Moving Average
+   double   EMA_1[1];
+   if(CopyBuffer(EMA1_Handle,0,0,1,EMA_1)!=1)
+     {
+      Print("CopyBuffer from iMA failed, no data");
+      return;
+     }
+
+   double   EMA_2[1];
+   if(CopyBuffer(EMA2_Handle,0,0,1,EMA_2)!=1)
+     {
+      Print("CopyBuffer from iMA failed, no data");
+      return;
+     }
+
+
+   double   EMA_3[1];
+   if(CopyBuffer(EMA3_Handle,0,0,1,EMA_3)!=1)
+     {
+      Print("CopyBuffer from iMA failed, no data");
+      return;
+     }
+
+
+   double   EMA_4[1];
+   if(CopyBuffer(EMA4_Handle,0,0,1,EMA_4)!=1)
+     {
+      Print("CopyBuffer from iMA failed, no data");
+      return;
+     }
+
+
+   double   EMA_5[1];
+   if(CopyBuffer(EMA5_Handle,0,0,1,EMA_5)!=1)
+     {
+      Print("CopyBuffer from iMA failed, no data");
+      return;
+     }
+
+   double   EMA_2Shift[1];
+   if(CopyBuffer(EMA2Shift_Handle,0,0,1,EMA_2Shift)!=1)
+     {
+      Print("CopyBuffer from iMA failed, no data");
+      return;
+     }
+
+//Buy conditions Check
+   if(EMA_1[0] > EMA_2[0])
+      Print("EMA1: ",EMA_1[0]," is above EMA2: ",EMA_2[0],"..............Buy Condition 1 is TRUE");
+   if(EMA_2[0] > EMA_3[0])
+      Print("EMA2: ",EMA_2[0]," is above EMA3: ",EMA_3[0],"..............Buy Condition 2 is TRUE");
+   if(EMA_3[0] > EMA_4[0])
+      Print("EMA3: ",EMA_3[0]," is above EMA4: ",EMA_4[0],"..............Buy Condition 3 is TRUE");
+   if(EMA_4[0] > EMA_5[0])
+      Print("EMA4: ",EMA_4[0]," is above EMA5: ",EMA_5[0],"..............Buy Condition 4 is TRUE");
+   if(EMA_2[0] > EMA_2Shift[0])
+      Print("EMA2: ",EMA_2[0]," is above EMA2Shift: ",EMA_2Shift[0],".........Buy Condition 5 is TRUE");
+
+   if(EMA_1[0] > EMA_2[0]
+      && EMA_2[0] > EMA_3[0]
+      && EMA_3[0] > EMA_4[0]
+      && EMA_4[0] > EMA_5[0]
+      && EMA_2[0] > EMA_2Shift[0]
+     )
+      Alert("ALL BUY Conditions are TRUE, -----------BUY order to be placed now--------");
+
+//Sell conditions Check
+   if(EMA_1[0] < EMA_2[0])
+      Print("EMA1: ",EMA_1[0]," is below EMA2: ",EMA_2[0]," ......SELL Condition 1 is TRUE");
+   if(EMA_2[0] < EMA_3[0])
+      Print("EMA2: ",EMA_2[0]," is below EMA3: ",EMA_3[0]," ......SELL Condition 2 is TRUE");
+   if(EMA_3[0] < EMA_4[0])
+      Print("EMA3: ",EMA_3[0]," is below EMA4: ",EMA_4[0]," ......SELL Condition 3 is TRUE");
+   if(EMA_4[0] < EMA_5[0])
+      Print("EMA4: ",EMA_4[0]," is below EMA5: ",EMA_5[0]," ......SELLCondition 4 is TRUE");
+   if(EMA_2[0] < EMA_2Shift[0])
+      Print("EMA2: ",EMA_2[0]," is below EMA2Shift: ",EMA_2Shift[0],"..SELL Condition 5 is TRUE");
+
+   if(EMA_1[0] > EMA_2[0]
+      && EMA_2[0] < EMA_3[0]
+      && EMA_3[0] < EMA_4[0]
+      && EMA_4[0] < EMA_5[0]
+      && EMA_2[0] < EMA_2Shift[0]
+     )
+      Alert("ALL SELL Conditions are TRUE, --------SELL order to be placed now----------");
+
+
+   Print("The total open orders count is at :  ",TotalOrdersCount());
+   Print("The symbol's point Value is: ", PointValue);
+   Print("Active Hours: ", CheckActiveHours());
+
+
+  }
+//+------------------------------------------------------------------+
+//|Check for weekday                                                 |
+//+------------------------------------------------------------------+
+bool WeekDays_Check()
+  {
+   MqlDateTime stm;
+   TimeToStruct(TimeCurrent(),stm);
+   return(WeekDays[stm.day_of_week]);
+  }
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+  {
+//---
+
+   if(TotalOrdersCount() <= 0)
+      CheckForOpen();
+
+   if(Conditions_check)
+      ConditionsCheck();
+
+   if(traditionalTrailingStopLoss== true && EMATrailingSTop==true)
+      TrailStop();
+
+   if(CheckForClosingConditions)
+      CheckForClose();
+
+   if(EMATrailingSTop==true && traditionalTrailingStopLoss==false)
+      EMATrailStop();
+      
+   if (ClosePartialPositions)
+      ClosePartial();
+
+  }
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+
+
