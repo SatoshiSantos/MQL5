@@ -1,0 +1,766 @@
+//+------------------------------------------------------------------+
+//|                                           Verification Test3.mq5 |
+//|                        Copyright 2023,Santos Family Holdings LLC |
+//+------------------------------------------------------------------+
+#property copyright "Copyright 2023,Santos Family Holdings LLC"
+#property version   "1.0"
+
+#include <Trade\Trade.mqh>
+#include <Trade\AccountInfo.mqh>
+#include <MovingAverages.mqh>
+
+input int magicNumber = 11162022;// Magic Number
+
+input int startHour = 0;//Start Hour
+input int startMinute = 0; //Start Minute
+input int endHour = 23; // End Hour
+input int endMinute = 59; // End minute
+
+input double maxDailyDrawdownPercent = 10.0; // Maximum daily drawdown percent
+
+input double lotSize = 0.1; // Lot size
+input int stopLossPoints = 30; // Stoploss in points
+input int takeProfitPoints = 130; // Take profit in points
+input int trailingStopPoints = 10; //Trailing stoploss in points
+
+input bool tradeMonday = true; //Trade on Monday
+input bool tradeTuesday = true; //Trade on Tuesday
+input bool tradeWednesday = true; //Trade on Wednesday
+input bool tradeThursday = true; //Trade on Thursday
+input bool tradeFriday = true; //Trade on Friday
+input bool tradeSaturday = false; //Trade on Saturday
+input bool tradeSunday = false; //Trade on Sunday
+
+//Trade classes and Handles
+CTrade trade;
+CAccountInfo AccInfo;
+int ma6Handle, ma26Handle, ma58Handle, ma60Handle;
+bool tradeAllowed= TerminalInfoInteger(TERMINAL_TRADE_ALLOWED);
+
+//+------------------------------------------------------------------+
+//| Oninit                                                           |
+//+------------------------------------------------------------------+
+int OnInit()
+  {
+//Set Magic number and Filing type
+   trade.SetTypeFillingBySymbol(_Symbol);
+   trade.SetExpertMagicNumber(magicNumber);
+
+// Initialize moving averages
+   ma6Handle = iMA(_Symbol, PERIOD_CURRENT, 6, 0, MODE_SMA, PRICE_CLOSE);
+   ma26Handle = iMA(_Symbol, PERIOD_CURRENT, 26, 0, MODE_SMA, PRICE_CLOSE);
+   ma58Handle = iMA(_Symbol, PERIOD_CURRENT, 58, 0, MODE_SMA, PRICE_CLOSE);
+   ma60Handle = iMA(_Symbol, PERIOD_CURRENT, 60, 0, MODE_SMA, PRICE_CLOSE);
+   if(ma6Handle == INVALID_HANDLE || ma26Handle == INVALID_HANDLE || ma58Handle == INVALID_HANDLE || ma60Handle == INVALID_HANDLE)
+     {
+      return INIT_FAILED;
+     }
+   else
+     {
+      Print("Moving average indicator handles have been initialized ");
+     }
+
+//Check valid lotsize
+   if(!checkValidVolume(lotSize))
+     {
+      Alert("Invalid Volume, Check lot size: ",lotSize);
+      //return INIT_FAILED;
+     }
+   else
+     {
+      Print("Lot size is withing the symbol requirements, lot size: ", lotSize);
+     }
+//Check if trading is allowed
+   if(!tradeAllowed)
+     {
+      Alert("Terminal check: Trading is not allowed");
+      //return INIT_FAILED;
+     }
+   else
+     {
+      Print("Terminal check: Trading is allowed");
+     }
+
+//Check for sufficient price history
+   if(!Bars(_Symbol,_Period)>61)
+     {
+      Alert("There is not enough price history available on this chart.");
+      //return INIT_FAILED;
+     }
+   else
+     {Print("There is enough price data for trading on this chart");}
+
+
+   return INIT_SUCCEEDED;
+  }
+//+------------------------------------------------------------------+
+//| Check for open                                                   |
+//+------------------------------------------------------------------+
+void CheckForOpen(void)
+  {
+   double pipValue= GetPipValue(_Symbol);
+// Run Checks before placing trades
+   if(!isTradingTime())
+     {Print("It is not time to trade, Start Hour: ", startHour,"Start Minute: ", startMinute);}
+   else
+     {
+      if(!isTradingDay())
+        {Print("Today is not an active trading day, check inputs for more information.");}
+      else
+        {
+         if(!checkMaxDailyDrawdown())
+           {Print("The Max Daily drawdown has been reached There will be no more trading for today.");}
+         else
+           {
+            if(!checkValidVolume(lotSize))
+              {Print("Invalid Volume, Check lot size: ",lotSize);}
+            else
+              {
+               if(!tradeAllowed)
+                 {Print("Terminal check: Trading is not allowed.");}
+               else
+                 {
+                  if(!Bars(_Symbol,_Period)>61)
+                    {Print("There is not enough price history available on this chart.");}
+                  else
+                    {
+
+                     // Update moving average values
+                     double ma6Value[2], ma26Value[2], ma58Value[2], ma60Value[2];
+                     if(CopyBuffer(ma6Handle, 0, 0, 2, ma6Value) != 2 ||
+                        CopyBuffer(ma26Handle, 0, 0, 2, ma26Value) != 2 ||
+                        CopyBuffer(ma58Handle, 0, 0, 2, ma58Value) != 2 ||
+                        CopyBuffer(ma60Handle, 0, 0, 2, ma60Value) != 2)
+                       {
+                        Print("Error updating moving average values.");
+                        return;
+                       }
+
+                     ENUM_ORDER_TYPE signal=WRONG_VALUE;
+                     if(//---Buy conditions
+                        //example condition for testing
+                        ma6Value[0] > ma60Value[0]
+
+
+                     )
+                        signal=ORDER_TYPE_BUY;    // Set buy order type
+
+                     if(//---Sell Conditions
+                        //example condition for testing
+                        ma6Value[0] < ma60Value[0]
+
+
+                     )
+                        signal=ORDER_TYPE_SELL;    // Set sell order type
+
+                     // get the current Actual ask/bid price
+                     MqlTick currentTick;
+                     if(SymbolInfoTick(_Symbol, currentTick))
+                       {
+                        double bidPrice = currentTick.bid;
+                        double askPrice = currentTick.ask;
+
+                        if(signal==ORDER_TYPE_BUY)
+                          {
+                           int    stop_level=(int)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL);
+                           double price_level;
+                           //--- if the minimum allowed offset distance in points from the current close price is not set
+                           if(stop_level<=0)
+                              stop_level=150; // set the offset distance of 150 points from the current close price
+                           else
+                              stop_level+=50; // set the offset distance to (SYMBOL_TRADE_STOPS_LEVEL + 50) points for reliability
+                           //--- calculation and rounding of the Stop Loss and Take Profit values
+                           price_level=stop_level*SymbolInfoDouble(_Symbol,SYMBOL_POINT);
+
+                           double entryPrice = normalizePrice(askPrice);
+                           double stopLoss = normalizePrice(entryPrice -price_level- (stopLossPoints * pipValue));
+                           double takeProfit = normalizePrice(entryPrice + price_level+(takeProfitPoints * pipValue));
+                           Print("Buy Order Entry Price: ", entryPrice," Buy Order Stoploss: ",stopLoss," Buy Order Take profit: ",takeProfit," Symbol trade stops level: ", SYMBOL_TRADE_STOPS_LEVEL*_Point," Symbol Freeze Level: ", SYMBOL_TRADE_FREEZE_LEVEL*_Point);
+                           double marginCheck = AccInfo.MarginCheck(_Symbol,ORDER_TYPE_BUY,lotSize,entryPrice);
+                           double freeMarginCheck = AccInfo.FreeMargin();
+                           //Print("marginCheck: ", marginCheck,"freeMarginCheck: ",freeMarginCheck);
+
+                           //Check margin and stop levels
+                           if(marginCheck < freeMarginCheck)
+                             {
+                              Print("Checking if it got to the BUY Order block------------------------------------");
+                              //--- declare and initialize the trade request and result of trade request
+                              MqlTradeRequest request= {};
+                              MqlTradeResult  result= {};
+                              //--- parameters of request
+                              request.action   =TRADE_ACTION_DEAL;                     // type of trade operation
+                              request.symbol   =Symbol();                              // symbol
+                              request.volume   =lotSize;                               // volume of 0.1 lot
+                              request.type     =ORDER_TYPE_BUY;                        // order type
+                              request.price    =entryPrice;                            // price for opening
+                              request.deviation=10;                                    // allowed deviation from the price
+                              request.magic    =magicNumber;                           // MagicNumber of the order
+                              request.sl = stopLoss;                                   // Stop loss
+                              request.tp = takeProfit;                                 // Take Profit
+                              //--- send the request
+                              if(!OrderSend(request,result))
+                                 PrintFormat("OrderSend error %d",GetLastError());     // if unable to send the request, output the error code
+                              //--- information about the operation
+                              PrintFormat("retcode=%u  deal=%I64u  order=%I64u",result.retcode,result.deal,result.order);
+                             }
+                          }
+                        else
+                          {
+                           if(signal==ORDER_TYPE_SELL)
+                             {
+                              int    stop_level=(int)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL);
+                              double price_level;
+                              //--- if the minimum allowed offset distance in points from the current close price is not set
+                              if(stop_level<=0)
+                                 stop_level=150; // set the offset distance of 150 points from the current close price
+                              else
+                                 stop_level+=50; // set the offset distance to (SYMBOL_TRADE_STOPS_LEVEL + 50) points for reliability
+                              //--- calculation and rounding of the Stop Loss and Take Profit values
+                              price_level=stop_level*SymbolInfoDouble(_Symbol,SYMBOL_POINT);
+
+                              double entryPrice = normalizePrice(bidPrice);
+                              double stopLoss = normalizePrice(entryPrice+ price_level + (stopLossPoints * pipValue));
+                              double takeProfit = normalizePrice(entryPrice - price_level - (takeProfitPoints * pipValue));
+                              Print("Sell Order Entry Price: ", entryPrice," Sell Order Stoploss: ",stopLoss," Sell Order Take profit: ",takeProfit," Symbol trade stops level: ", SYMBOL_TRADE_STOPS_LEVEL*_Point," Symbol Freeze Level: ", SYMBOL_TRADE_FREEZE_LEVEL*_Point);
+                              double marginCheck = AccInfo.MarginCheck(_Symbol,ORDER_TYPE_SELL,lotSize,entryPrice);
+                              double freeMarginCheck = AccInfo.FreeMargin();
+                              //Print("marginCheck: ", marginCheck,"freeMarginCheck: ",freeMarginCheck);
+
+                              //Check margin and stop levels
+                              if(marginCheck < freeMarginCheck)
+                                {
+                                 Print("Checking if it got to the Sell Order block------------------------------------");
+                                 //Open sell trade
+                                 //--- declare and initialize the trade request and result of trade request
+                                 MqlTradeRequest request= {};
+                                 MqlTradeResult  result= {};
+                                 //--- parameters of request
+                                 request.action   =TRADE_ACTION_DEAL;                     // type of trade operation
+                                 request.symbol   =Symbol();                              // symbol
+                                 request.volume   =lotSize;                               // volume of 0.1 lot
+                                 request.type     =ORDER_TYPE_SELL;                        // order type
+                                 request.price    =entryPrice;                            // price for opening
+                                 request.deviation=10;                                    // allowed deviation from the price
+                                 request.magic    =magicNumber;                           // MagicNumber of the order
+                                 request.sl = stopLoss;                                   // Stop loss
+                                 request.tp = takeProfit;                                 // Take Profit
+                                 //--- send the request
+                                 if(!OrderSend(request,result))
+                                    PrintFormat("OrderSend error %d",GetLastError());     // if unable to send the request, output the error code
+                                 //--- information about the operation
+                                 PrintFormat("retcode=%u  deal=%I64u  order=%I64u",result.retcode,result.deal,result.order);
+
+                                }
+                             }
+
+                          }
+                       }
+                    }
+                 }
+              }
+           }
+        }
+     }
+  }
+//+------------------------------------------------------------------+
+//|OnTick                                                            |
+//+------------------------------------------------------------------+
+void OnTick()
+  {
+//---If there are no open orders, check for open conditions
+   if(TotalOrdersCount() <= 0)
+      CheckForOpen();
+
+//---Update trailing stop
+   if(trailingStopPoints > 0 && TotalOrdersCount() > 0)
+      applyTrailingStop();
+
+
+//---Comments
+//---Ask-Bid-Spread -Bar Time remaining
+   double Ask,Bid,Spread;
+   string remainingTime = TimeRemaining();
+   Ask=SymbolInfoDouble(Symbol(),SYMBOL_ASK);
+   Bid=SymbolInfoDouble(Symbol(),SYMBOL_BID);
+   Spread= NormalizeDouble(MathAbs(Ask-Bid),_Digits);
+//--- Output values in three lines
+   Comment(StringFormat("Ask = %G\nBid = %G\nSpread = %G\nBar closes in: %s\n",Ask,Bid,Spread,remainingTime));
+
+
+  }
+//+------------------------------------------------------------------+
+//| Check for active trading time                                    |
+//+------------------------------------------------------------------+
+bool isTradingTime()
+  {
+   MqlDateTime mqlDateTime;
+   TimeToStruct(TimeCurrent(), mqlDateTime);
+   int currentHour = mqlDateTime.hour;
+   int currentMinute = mqlDateTime.min;
+
+   int startTimeInMinutes = startHour * 60 + startMinute;
+   int endTimeInMinutes = endHour * 60 + endMinute;
+   int currentTimeInMinutes = currentHour * 60 + currentMinute;
+
+   if(startTimeInMinutes <= currentTimeInMinutes && currentTimeInMinutes <= endTimeInMinutes)
+     {
+      return true;
+     }
+
+   return false;
+  }
+//+------------------------------------------------------------------+
+//| Check volume                                                     |
+//+------------------------------------------------------------------+
+bool checkValidVolume(double volume)
+  {
+   double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double volumeStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+
+   if(volume < minVolume || volume > maxVolume)
+     {
+      return false;
+     }
+
+   double volumeDifference = volume - minVolume;
+   double stepCount = MathRound(volumeDifference / volumeStep);
+
+   if(MathAbs(volumeDifference - stepCount * volumeStep) > 0.0001)
+     {
+      return false;
+     }
+
+   return true;
+  }
+//+------------------------------------------------------------------+
+//| Check SL TP Levels                                               |
+//+------------------------------------------------------------------+
+bool checkStopLossTakeProfitLevels(double entryPrice, double stopLoss, double takeProfit)
+  {
+   int minStopLevel = (int)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL);
+   int freezeLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+
+   if(minStopLevel<=0)
+      minStopLevel=150; // set the offset distance of 150 points from the current close price
+   else
+      minStopLevel+=50; // set the offset distance to (SYMBOL_TRADE_STOPS_LEVEL + 50) points for reliability
+
+   if(freezeLevel<=0)
+      freezeLevel=150; // set the offset distance of 150 points from the current close price
+   else
+      freezeLevel+=50; // set the offset distance to (SYMBOL_TRADE_STOPS_LEVEL + 50) points for reliability
+
+   if(MathAbs(entryPrice - stopLoss) < minStopLevel || MathAbs(entryPrice - takeProfit) < minStopLevel)
+     {
+      return false;
+     }
+
+   if(MathAbs(entryPrice - stopLoss) < freezeLevel || MathAbs(entryPrice - takeProfit) < freezeLevel)
+     {
+      return false;
+     }
+
+   return true;
+  }
+//+------------------------------------------------------------------+
+//| Check for active trading day                                     |
+//+------------------------------------------------------------------+
+bool isTradingDay()
+  {
+   datetime currentTime = TimeCurrent();
+   MqlDateTime mqlDateTime;
+   TimeToStruct(currentTime, mqlDateTime);
+   ENUM_DAY_OF_WEEK currentDayOfWeek = (ENUM_DAY_OF_WEEK)mqlDateTime.day_of_week;
+
+   switch(currentDayOfWeek)
+     {
+      case MONDAY:
+         return tradeMonday;
+      case TUESDAY:
+         return tradeTuesday;
+      case WEDNESDAY:
+         return tradeWednesday;
+      case THURSDAY:
+         return tradeThursday;
+      case FRIDAY:
+         return tradeFriday;
+      case SATURDAY:
+         return tradeSaturday;
+      case SUNDAY:
+         return tradeSunday;
+      default:
+         return false;
+     }
+  }
+//+------------------------------------------------------------------+
+//|Check max daily drawdown                                          |
+//+------------------------------------------------------------------+
+bool checkMaxDailyDrawdown(void)
+  {
+   static datetime lastTradingDay = 0;
+   static double initialBalance = 0;
+
+   datetime currentDay = TimeCurrent() / 86400;
+   if(currentDay > lastTradingDay)
+     {
+      lastTradingDay = currentDay;
+      initialBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+     }
+
+   double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double drawdown = initialBalance - currentBalance;
+   double drawdownPercent = (drawdown / initialBalance) * 100;
+//Print("Calculated draw down percent is :", drawdownPercent,"the max daily drawdown percent is: ",maxDailyDrawdownPercent);
+   if(maxDailyDrawdownPercent == 0)
+     {
+      return true;
+     }
+   else
+     {
+      return drawdownPercent <= maxDailyDrawdownPercent;
+     }
+
+  }
+//+------------------------------------------------------------------+
+//| Trailing stop                                                    |
+//+------------------------------------------------------------------+
+void applyTrailingStop(void)
+  {
+//Print("The code has entered the trailing stop function");
+   double pipValue= GetPipValue(_Symbol);
+//Print("The Pip value is ", pipValue);
+   MqlTick currentTick;
+   if(SymbolInfoTick(_Symbol, currentTick))
+     {
+      double Bid = currentTick.bid;
+      //Print("The Trailing stop Bid price is: ", Bid);
+      double Ask = currentTick.ask;
+      //Print("The Trailing stop Ask price is: ", Ask);
+      int totalOrders = PositionsTotal();
+      //Print("The total open orders are: ", totalOrders);
+      double trailingStopPointsapply = trailingStopPoints *pipValue;
+      //Print("The Trailing stop in pips: ", trailingStopPointsapply);
+
+      for(int i = 0; i < totalOrders; i++)
+        {
+         ulong ticket =PositionGetInteger(POSITION_TICKET);
+         //Print("The current ticket number is: ", ticket);
+         const string symbol = PositionGetString(POSITION_SYMBOL);
+         //Print("The current position symbol is: ", symbol);
+         //Print("=======================================================Sym = Symbol==================================== ",symbol==_Symbol);
+         if(symbol != _Symbol)
+           {
+            //Print("Position symbol does not match chart symbol: ", symbol, _Symbol);
+            continue; // Skip positions of other symbols
+           }
+         else
+           {
+            // Print("Position symbol  matches chart symbol: ", symbol, _Symbol);
+           }
+
+         if(PositionGetInteger(POSITION_MAGIC) != magicNumber)
+           {
+            // Print("Position magic number does not match EA magic number: ",PositionGetInteger(POSITION_MAGIC), magicNumber);
+            continue; // Skip positions with a different magic number
+           }
+         else
+           {
+            //Print("Position magic number matches EA magic number: ",PositionGetInteger(POSITION_MAGIC), magicNumber);
+           }
+
+         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         //Print("Position Open Price: ", openPrice);
+         double stopLoss = PositionGetDouble(POSITION_SL);
+         double positionTP = PositionGetDouble(POSITION_TP);
+         //Print("Position Take Profit: ", positionTP);
+         int    freeze_level=(int)SymbolInfoInteger(symbol,SYMBOL_TRADE_FREEZE_LEVEL);
+         //Print("Position Freeze Level: ", freeze_level);
+         int    stop_level=(int)SymbolInfoInteger(symbol,SYMBOL_TRADE_STOPS_LEVEL);
+         double price_level;
+         //--- if the minimum allowed offset distance in points from the current close price is not set
+         if(stop_level<=0)
+            stop_level=150; // set the offset distance of 150 points from the current close price
+         else
+            stop_level+=50; // set the offset distance to (SYMBOL_TRADE_STOPS_LEVEL + 50) points for reliability
+
+         //--- calculation and rounding of the Stop Loss and Take Profit values
+         price_level=stop_level*SymbolInfoDouble(symbol,SYMBOL_POINT);
+
+         double newStopLoss = 0;
+         double point=SymbolInfoDouble(symbol,SYMBOL_POINT);
+
+
+
+         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+           {
+            //Print("Current POSITION_TYPE_BUY");
+            newStopLoss = normalizePrice(Bid - price_level - trailingStopPointsapply);
+            bool StopLossChanged=(MathAbs(stopLoss-newStopLoss)>point);
+            /*Print("New Stop Loss: ", newStopLoss);
+            Print("Position Stop loss: ", stopLoss);
+            Print("The difference betewwen the current stop loss and the new stop loss is: ",MathAbs(stopLoss - newStopLoss));
+
+            Print("Trailing stop loss conditions check");
+            Print("1. New stop loss greater than open price: ", newStopLoss > openPrice);
+            Print("2. Current Stop Loss less than open price: ", newStopLoss > openPrice);
+            Print("2.5 New Stop Loss greater than current stop loss: ", newStopLoss > stopLoss);
+            Print("3. The new stop loss is not the current stoploss: ", newStopLoss != stopLoss);
+            Print("3. Stop loss canged: ", StopLossChanged);
+            Print("4. The new stop loss is not 0: ", newStopLoss != 0);
+            Print("5. TBid - new stoploss is gretare than frezze level: ", Bid-newStopLoss >freeze_level);
+            if(newStopLoss > openPrice && (stopLoss < openPrice || newStopLoss > stopLoss) && newStopLoss != stopLoss && newStopLoss != 0 && Bid-newStopLoss >freeze_level && StopLossChanged)
+              {
+
+               Print("--------------------ALL TRAILING STOP CONDINTIONS ARE TRUE------------------ ");
+
+              }
+              */
+
+            if(newStopLoss > openPrice && (stopLoss < openPrice || newStopLoss > stopLoss) && newStopLoss != stopLoss && newStopLoss != 0 && Bid-newStopLoss >freeze_level && StopLossChanged)
+              {
+               if(!trade.PositionModify(ticket, newStopLoss, positionTP))
+                 {
+                  PrintFormat("Error: Failed to modify position. Error code: %d", GetLastError());
+                 }
+              }
+           }
+         else
+            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
+              {
+               //Print("Current POSITION_TYPE_SELL");
+               newStopLoss = normalizePrice(Ask + price_level+ trailingStopPointsapply);
+               bool StopLossChanged=(MathAbs(stopLoss-newStopLoss)>point);
+               //Print("New Stop Loss: ", newStopLoss);
+               //Print("Position Stop loss: ", stopLoss);
+               //Print("The difference betewwen the new current stop loss and the new stop loss is: ",MathAbs(stopLoss - newStopLoss));
+               if(newStopLoss < openPrice && (stopLoss > openPrice || newStopLoss < stopLoss) && newStopLoss != stopLoss && newStopLoss != 0 && newStopLoss-Ask > freeze_level && StopLossChanged)
+                 {
+                  if(!trade.PositionModify(ticket, newStopLoss, positionTP))
+                    {
+                     PrintFormat("Error: Failed to modify position. Error code: %d", GetLastError());
+                    }
+                 }
+              }
+        }
+     }
+  }
+/*//+------------------------------------------------------------------+
+//| Trailing stop                                                    |
+//+------------------------------------------------------------------+
+void applyTrailingStop(void)
+  {
+
+      double pipValue= GetPipValue(_Symbol);
+
+      //--- declare and initialize the trade request and result of trade request
+      MqlTradeRequest request;
+      MqlTradeResult  result;
+      int total=PositionsTotal(); // number of open positions
+      //--- iterate over all open positions
+      for(int i=0; i<total; i++)
+        {
+         //--- parameters of the order
+         ulong  position_ticket=PositionGetTicket(i);// ticket of the position
+         string position_symbol=PositionGetString(POSITION_SYMBOL); // symbol
+         int    digits=(int)SymbolInfoInteger(position_symbol,SYMBOL_DIGITS); // number of decimal places
+         ulong  magic=PositionGetInteger(POSITION_MAGIC); // MagicNumber of the position
+         double volume=PositionGetDouble(POSITION_VOLUME);    // volume of the position
+         double sl=PositionGetDouble(POSITION_SL);  // Stop Loss of the position
+         double tp=PositionGetDouble(POSITION_TP);  // Take Profit of the position
+         ENUM_POSITION_TYPE type=(ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);  // type of the position
+         //--- output information about the position
+         PrintFormat("#%I64u %s  %s  %.2f  %s  sl: %s  tp: %s  [%I64d]",
+                     position_ticket,
+                     position_symbol,
+                     EnumToString(type),
+                     volume,
+                     DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN),digits),
+                     DoubleToString(sl,digits),
+                     DoubleToString(tp,digits),
+                     magic);
+         //--- if the MagicNumber matches.
+         if(magic==magicNumber)
+           {
+            //--- calculate the current price levels
+            double price=PositionGetDouble(POSITION_PRICE_OPEN);
+            double bid=SymbolInfoDouble(position_symbol,SYMBOL_BID);
+            double ask=SymbolInfoDouble(position_symbol,SYMBOL_ASK);
+            int    stop_level=(int)SymbolInfoInteger(position_symbol,SYMBOL_TRADE_STOPS_LEVEL);
+            int    freeze_level=(int)SymbolInfoInteger(position_symbol,SYMBOL_TRADE_FREEZE_LEVEL);
+            double price_level;
+            double newStopLoss = 0;
+            //--- if the minimum allowed offset distance in points from the current close price is not set
+            if(stop_level<=0)
+               stop_level=150; // set the offset distance of 150 points from the current close price
+            else
+               stop_level+=50; // set the offset distance to (SYMBOL_TRADE_STOPS_LEVEL + 50) points for reliability
+
+            //--- calculation and rounding of the Stop Loss and Take Profit values
+            price_level=stop_level*SymbolInfoDouble(position_symbol,SYMBOL_POINT);
+            if(type==POSITION_TYPE_BUY)
+              {
+               newStopLoss = normalizePrice(bid - price_level - (trailingStopPoints* pipValue));
+               if(newStopLoss > price && (sl < price || newStopLoss > sl) && !newStopLoss==0 && bid-newStopLoss >freeze_level)
+                 {
+                  //--- zeroing the request and result values
+                  ZeroMemory(request);
+                  ZeroMemory(result);
+                  //--- setting the operation parameters
+                  request.action  =TRADE_ACTION_SLTP; // type of trade operation
+                  request.position=position_ticket;   // ticket of the position
+                  request.symbol=position_symbol;     // symbol
+                  request.sl      =newStopLoss;       // Stop Loss of the position
+                  request.tp      =tp;                // Take Profit of the position
+                  request.magic=magicNumber;         // MagicNumber of the position
+                  //--- output information about the modification
+                  PrintFormat("Modify #%I64d %s %s",position_ticket,position_symbol,EnumToString(type));
+                  //--- send the request
+                  if(!OrderSend(request,result))
+                     PrintFormat("OrderSend error %d",GetLastError());  // if unable to send the request, output the error code
+                  //--- information about the operation
+                  PrintFormat("retcode=%u  deal=%I64u  order=%I64u",result.retcode,result.deal,result.order);
+                 }
+              }
+            else
+              {
+               newStopLoss = normalizePrice(ask + price_level + (trailingStopPoints* pipValue) );
+               if(newStopLoss < price && (sl > price || newStopLoss < sl) && !newStopLoss==0 && newStopLoss-ask > freeze_level)
+                 {
+                  //--- zeroing the request and result values
+                  ZeroMemory(request);
+                  ZeroMemory(result);
+                  //--- setting the operation parameters
+                  request.action  =TRADE_ACTION_SLTP; // type of trade operation
+                  request.position=position_ticket;   // ticket of the position
+                  request.symbol=position_symbol;     // symbol
+                  request.sl      =newStopLoss;                // Stop Loss of the position
+                  request.tp      =tp;                // Take Profit of the position
+                  request.magic=magicNumber;         // MagicNumber of the position
+                  //--- output information about the modification
+                  PrintFormat("Modify #%I64d %s %s",position_ticket,position_symbol,EnumToString(type));
+                  //--- send the request
+                  if(!OrderSend(request,result))
+                     PrintFormat("OrderSend error %d",GetLastError());  // if unable to send the request, output the error code
+                  //--- information about the operation
+                  PrintFormat("retcode=%u  deal=%I64u  order=%I64u",result.retcode,result.deal,result.order);
+                 }
+              }
+           }
+        }
+     } */
+//+------------------------------------------------------------------+
+//|Total Orders count                                                |
+//+------------------------------------------------------------------+
+int TotalOrdersCount()
+  {
+   int result=0;
+   int posTotal=PositionsTotal();
+   for(int posIndex=posTotal-1; posIndex>=0; posIndex--)
+     {
+      ulong ticket=PositionGetTicket(posIndex);
+      if(PositionSelectByTicket(ticket) && PositionGetInteger(POSITION_MAGIC)==magicNumber)
+         result++;
+     }
+   return (result);
+  }
+//+------------------------------------------------------------------+
+//| Normalize price according to tick size                           |
+//+------------------------------------------------------------------+
+double normalizePrice(double price)
+  {
+   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   return(MathRound(price / tickSize) * tickSize);
+  }
+//+------------------------------------------------------------------+
+//|Time Remaining on current bar                                     |
+//+------------------------------------------------------------------+
+string TimeRemaining()
+  {
+   datetime currentTime = TimeCurrent();
+   datetime currentBarOpenTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   int periodInSeconds = PeriodSeconds(PERIOD_CURRENT);
+   datetime currentBarCloseTime = currentBarOpenTime + periodInSeconds;
+
+   int remainingTime = (int)(currentBarCloseTime - currentTime);
+   int hours = remainingTime / 3600;
+   int minutes = (remainingTime % 3600) / 60;
+   int seconds = remainingTime % 60;
+
+   string remainingTimeString = StringFormat("%02d:%02d:%02d", hours, minutes, seconds);
+   return remainingTimeString;
+  }
+
+//+------------------------------------------------------------------+
+//|Is market open                                                    |
+//+------------------------------------------------------------------+
+bool IsMarketOpen()
+  {
+   datetime server_time = TimeCurrent();
+   datetime local_time = TimeLocal();
+   datetime time_difference = local_time - server_time;
+
+   MqlDateTime mql_time;
+   TimeToStruct(local_time, mql_time);
+   int day_of_week = mql_time.day_of_week;
+   MqlTick last_tick;
+   if(!SymbolInfoTick(_Symbol, last_tick))
+     {
+      Print("Failed to get last tick for the symbol: ", _Symbol);
+      return false;
+     }
+   datetime symbol_time = last_tick.time + time_difference;
+
+// Check if the server is connected
+   if(TerminalInfoInteger(TERMINAL_CONNECTED) == 0)
+     {
+      Print("Server not connected.");
+      return false;
+     }
+
+// Check if the last known tick time for the symbol is within the current session
+   datetime session_start, session_end;
+   uint session_index = 0;
+   while(SymbolInfoSessionQuote(_Symbol, (ENUM_DAY_OF_WEEK)day_of_week, session_index, session_start, session_end))
+     {
+      if(symbol_time >= session_start && symbol_time <= session_end)
+         return true;
+      session_index++;
+     }
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+//|Get PIP Value                                                     |
+//+------------------------------------------------------------------+
+double GetPipValue(string symbol)
+  {
+   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   double pip_value;
+
+   if(digits == 1 || digits == 2)
+     {
+      pip_value = 1.00;
+     }
+   else
+      if(digits == 3)
+        {
+         pip_value = 0.01;
+        }
+      else
+         if(digits == 4 || digits == 5)
+           {
+            pip_value = 0.0001;
+           }
+         else
+           {
+            Print("Unsupported number of decimal places for symbol: ", symbol);
+            return 0;
+           }
+
+   return pip_value;
+  }
+
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
